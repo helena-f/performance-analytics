@@ -23,7 +23,7 @@ async fn main() -> std::io::Result<()> {
             .configure(api::routes::configure)
             .route("/ws/profile", web::get().to(api::ws::profiling_ws))
     })
-    .bind("127.0.0.1:8080")?
+    .bind("0.0.0.0:8080")?
     .run()
     .await
 }

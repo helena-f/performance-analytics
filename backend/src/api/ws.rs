@@ -1,13 +1,38 @@
 use actix_web::{web, HttpRequest, HttpResponse, Error};
+use actix_ws::AggregatedMessage;
+use futures_util::StreamExt;
 use tokio::time::{interval, Duration};
 use crate::profiler::{cpu::CpuProfiler, memory::MemoryProfiler, sampler::*, swiftui::SwiftUIAnalyzer};
 use crate::models::ProfileEvent;
 
 /// WebSocket handler for live profiling data streaming
 pub async fn profiling_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    let (response, mut session, _msg_stream) = actix_ws::handle(&req, stream)?;
+    let (response, mut session, msg_stream) = actix_ws::handle(&req, stream)?;
 
-    // Spawn the profiling loop
+    // We need to consume incoming messages (pings/close frames) or the connection breaks.
+    // Spawn a task to drain the incoming stream.
+    let mut msg_stream = msg_stream
+        .aggregate_continuations()
+        .max_continuation_size(2_usize.pow(20));
+
+    let (close_tx, mut close_rx) = tokio::sync::oneshot::channel::<()>();
+
+    // Task 1: drain incoming messages, detect close
+    actix_web::rt::spawn(async move {
+        while let Some(msg) = msg_stream.next().await {
+            match msg {
+                Ok(AggregatedMessage::Close(_)) => break,
+                Ok(AggregatedMessage::Ping(data)) => {
+                    // pong is handled automatically by actix-ws
+                    let _ = data;
+                }
+                _ => {}
+            }
+        }
+        let _ = close_tx.send(());
+    });
+
+    // Task 2: send profiling data
     actix_web::rt::spawn(async move {
         let mut cpu = CpuProfiler::new();
         let mut memory = MemoryProfiler::new();
@@ -26,10 +51,15 @@ pub async fn profiling_ws(req: HttpRequest, stream: web::Payload) -> Result<Http
 
         // Sample at ~4Hz for smooth visualization
         let mut tick = interval(Duration::from_millis(250));
-        let mut stack_samples = Vec::new();
 
         loop {
-            tick.tick().await;
+            tokio::select! {
+                _ = tick.tick() => {},
+                _ = &mut close_rx => {
+                    let _ = session.close(None).await;
+                    break;
+                }
+            }
 
             // CPU sample
             let cpu_sample = cpu.sample();
@@ -60,9 +90,8 @@ pub async fn profiling_ws(req: HttpRequest, stream: web::Payload) -> Result<Http
                 break;
             }
 
-            // Stack sample (less frequent)
+            // Stack sample
             let stack = stack_sampler.sample();
-            stack_samples.push(stack.clone());
             let event = ProfileEvent::StackCapture(stack);
             if session.text(serde_json::to_string(&event).unwrap()).await.is_err() {
                 break;
