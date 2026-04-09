@@ -12,11 +12,31 @@ export default function App() {
   const liveProfiler = useProfiler();
   const demoProfiler = useDemoProfiler();
 
-  // Check if the Rust backend is running on startup
+  // Check if the Rust backend is running on startup (retry for Fly cold starts)
   useEffect(() => {
-    fetch('/api/health')
-      .then(res => res.ok ? setBackendAvailable(true) : setBackendAvailable(false))
-      .catch(() => setBackendAvailable(false));
+    const apiBase = import.meta.env.DEV ? '' : 'https://perfscope-api.fly.dev';
+    let attempts = 0;
+    const maxAttempts = 3;
+    const tryConnect = () => {
+      fetch(`${apiBase}/api/health`)
+        .then(res => {
+          if (res.ok) {
+            setBackendAvailable(true);
+          } else if (++attempts < maxAttempts) {
+            setTimeout(tryConnect, 2000);
+          } else {
+            setBackendAvailable(false);
+          }
+        })
+        .catch(() => {
+          if (++attempts < maxAttempts) {
+            setTimeout(tryConnect, 2000);
+          } else {
+            setBackendAvailable(false);
+          }
+        });
+    };
+    tryConnect();
   }, []);
 
   const profiler = backendAvailable ? liveProfiler : demoProfiler;

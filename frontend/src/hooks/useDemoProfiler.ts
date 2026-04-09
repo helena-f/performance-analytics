@@ -3,6 +3,7 @@ import type {
   CpuSample, MemorySample, IoSample, EnergySample,
   StackSample, SwiftUIIssue, FlameNode,
 } from '../types';
+import { buildFlameGraph } from '../utils/flamegraph';
 
 const MAX_SAMPLES = 600;
 
@@ -167,36 +168,6 @@ function generateSwiftUIIssue(t: number): SwiftUIIssue | null {
     update_count: Math.floor(randomBetween(1, 30)),
     time_spent_ms: randomBetween(0.5, 50),
   };
-}
-
-function buildFlameGraph(samples: StackSample[]): FlameNode {
-  const root: FlameNode = { name: 'root', module: '', value: 0, total: 0, children: [] };
-
-  for (const sample of samples) {
-    const frames = [...sample.frames].reverse();
-    let current = root;
-    for (const frame of frames) {
-      const name = `${frame.module}::${frame.function_name}`;
-      let child = current.children.find(c => c.name === name);
-      if (!child) {
-        child = { name, module: frame.module, value: 0, total: 0, children: [] };
-        current.children.push(child);
-      }
-      current = child;
-    }
-    current.value += sample.weight;
-  }
-
-  function computeTotals(node: FlameNode): number {
-    let total = node.value;
-    for (const child of node.children) {
-      total += computeTotals(child);
-    }
-    node.total = total;
-    return total;
-  }
-  computeTotals(root);
-  return root;
 }
 
 export interface DemoProfilerState {

@@ -3,8 +3,13 @@ import type {
   CpuSample, MemorySample, IoSample, EnergySample,
   StackSample, SwiftUIIssue, FlameNode, ProfileEvent,
 } from '../types';
+import { buildFlameGraph } from '../utils/flamegraph';
 
 const MAX_SAMPLES = 600; // ~2.5 minutes at 4Hz
+const API_BASE = import.meta.env.DEV ? '' : 'https://perfscope-api.fly.dev';
+const WS_BASE = import.meta.env.DEV
+  ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+  : 'wss://perfscope-api.fly.dev';
 
 export interface ProfilerState {
   isRecording: boolean;
@@ -38,8 +43,7 @@ export function useProfiler() {
   const timerRef = useRef<number | null>(null);
 
   const startRecording = useCallback(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/profile`);
+    const ws = new WebSocket(`${WS_BASE}/ws/profile`);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -136,13 +140,12 @@ export function useProfiler() {
   }, [stopRecording]);
 
   const fetchFlameGraph = useCallback(async () => {
-    try {
-      const res = await fetch('/api/flamegraph');
-      const data = await res.json();
-      setState(prev => ({ ...prev, flameGraph: data }));
-    } catch (err) {
-      console.error('Failed to fetch flame graph:', err);
-    }
+    // Build flame graph from collected stack samples (live data)
+    setState(prev => {
+      if (prev.stackSamples.length === 0) return prev;
+      const flame = buildFlameGraph(prev.stackSamples);
+      return { ...prev, flameGraph: flame };
+    });
   }, []);
 
   useEffect(() => {
